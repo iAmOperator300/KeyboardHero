@@ -1,0 +1,428 @@
+// HIGH SCORE: 1350 - iAmOperator
+// Scores: 1230 - iAmOperator, 800 - iAmOperator, 580 - iAmOperator
+
+// Import the ArrayList library
+import java.util.ArrayList;
+
+// === GAME STATE MANAGEMENT ===
+// An enumeration to manage the different states of the game
+enum GameState {
+  PLAYING,
+  LEVEL_END,
+  GAME_OVER
+}
+GameState currentState = GameState.PLAYING;
+
+// === CORE GAME VARIABLES ===
+int score = 0;
+int totalScore = 0;
+int level = 1;
+float gameSpeed = 2.0; // Initial speed of the targets
+int deathPoints = 0;
+final int MAX_DEATH_POINTS = 25;
+
+// === TIMING ===
+int levelDuration = 30000; // 30 seconds in milliseconds
+int levelStartTime;
+int levelEndTransitionTime; // To time the "Level End" screen
+ArrayList<Long> spawnTimestamps; // To track spawn rate
+final int MAX_SPAWNS_PER_SECOND = 1;
+
+
+// === TARGETS & LANES ===
+ArrayList<Target> targets; // List to hold all active targets
+final int NUM_LANES = 8;
+float laneWidth;
+long[] laneCooldowns = new long[NUM_LANES]; // To track when a target last appeared in a lane
+final int TARGET_COOLDOWN = 2000; // 2 seconds before a lane can be used again
+final int TARGET_DIAMETER = 50;
+final int TARGET_RADIUS = TARGET_DIAMETER / 2;
+
+// === HIT ZONE ===
+// Make the green box taller (1.5x the size of a target)
+final int HIT_ZONE_HEIGHT = (int)(TARGET_DIAMETER * 1.5); 
+int hitZoneY;
+
+// === COLORS ===
+// Symmetrical colors: a-;, s-l, d-k, f-j
+color[] laneColors = {
+  color(255, 0, 0),    // Red (A)
+  color(0, 0, 255),    // Blue (S)
+  color(255, 255, 0),  // Yellow (D)
+  color(0, 255, 255),  // Cyan (F)
+  color(0, 255, 255),  // Cyan (J)
+  color(255, 255, 0),  // Yellow (K)
+  color(0, 0, 255),    // Blue (L)
+  color(255, 0, 0)     // Red (;)
+};
+color hitZoneColor = color(0, 150, 0, 150); // Translucent green
+color separatorColor = color(50);
+color bgColor = color(10);
+
+// === KEYS ===
+char[] keys = {'a', 's', 'd', 'f', 'j', 'k', 'l', ';'};
+
+
+// =================================================================================
+// SETUP FUNCTION: Runs once when the program starts
+// =================================================================================
+void setup() {
+  size(800, 600); // Set the window size
+  
+  // Initialize game variables
+  targets = new ArrayList<Target>();
+  spawnTimestamps = new ArrayList<Long>();
+  laneWidth = (float)width / NUM_LANES;
+  hitZoneY = height - HIT_ZONE_HEIGHT;
+  levelStartTime = millis(); // Start the first level timer
+  
+  // Initialize all lane cooldowns to 0
+  for (int i = 0; i < NUM_LANES; i++) {
+    laneCooldowns[i] = 0;
+  }
+  
+  textAlign(CENTER, CENTER);
+  textSize(24);
+}
+
+// =================================================================================
+// DRAW FUNCTION: Main game loop, runs continuously
+// =================================================================================
+void draw() {
+  // Use a switch statement to handle different game states
+  switch (currentState) {
+    case PLAYING:
+      runGame();
+      break;
+    case LEVEL_END:
+      showLevelEndScreen();
+      break;
+    case GAME_OVER:
+      showGameOverScreen();
+      break;
+  }
+}
+
+// =================================================================================
+// GAME LOGIC FUNCTIONS
+// =================================================================================
+
+/**
+ * Manages all game logic while in the PLAYING state.
+ */
+void runGame() {
+  background(bgColor); // Clear the screen with a dark background
+  
+  // --- Draw Game Elements ---
+  drawLanes();
+  drawHitZone();
+  
+  // --- Game Logic ---
+  spawnNewTargets();
+  updateAndDrawTargets();
+  checkLevelTimer();
+  checkDeathPoints(); // Check if the game should end due to mistakes
+  
+  // --- Display UI ---
+  drawHUD();
+}
+
+/**
+ * Displays the screen shown between levels.
+ */
+void showLevelEndScreen() {
+  background(bgColor);
+  textSize(48);
+  fill(255);
+  text("Level " + (level - 1) + " Complete!", width / 2, height / 2 - 50);
+  textSize(32);
+  text("Level Score: " + score, width / 2, height / 2 + 20);
+  
+  // Wait for 3 seconds before starting the next level
+  if (millis() - levelEndTransitionTime > 3000) {
+    totalScore += score; // Add level score to total
+    score = 0;           // Reset score for the next level
+    levelStartTime = millis(); // Reset the level timer
+    currentState = GameState.PLAYING; // Go back to playing
+  }
+}
+
+/**
+ * Displays the final game over screen with the total score.
+ */
+void showGameOverScreen() {
+  background(bgColor);
+  textSize(64);
+  fill(255, 0, 0);
+  text("GAME OVER", width / 2, height / 2 - 80);
+  textSize(40);
+  fill(255);
+  text("Total Score: " + totalScore, width / 2, height / 2 + 10);
+  textSize(28);
+  text("Mistakes: " + deathPoints + " / " + MAX_DEATH_POINTS, width/2, height/2 + 60);
+  noLoop(); // Stop the draw loop
+}
+
+// =================================================================================
+// DRAWING HELPER FUNCTIONS
+// =================================================================================
+
+/**
+ * Draws the vertical lane dividers.
+ */
+void drawLanes() {
+  stroke(separatorColor);
+  strokeWeight(2);
+  for (int i = 1; i < NUM_LANES; i++) {
+    float x = i * laneWidth;
+    line(x, 0, x, height);
+  }
+}
+
+/**
+ * Draws the green hit zone at the bottom of the screen.
+ */
+void drawHitZone() {
+  noStroke();
+  fill(hitZoneColor);
+  rect(0, hitZoneY, width, HIT_ZONE_HEIGHT);
+}
+
+/**
+ * Draws the Heads-Up Display (Score, Level, Time, Mistakes).
+ */
+void drawHUD() {
+  textSize(20);
+  fill(255);
+  textAlign(LEFT, TOP);
+  text("Score: " + score, 10, 10);
+  text("Level: " + level, 10, 35);
+  
+  // Display death points
+  fill(255, 100, 100); // Make mistakes stand out in red
+  text("Mistakes: " + deathPoints + " / " + MAX_DEATH_POINTS, 10, 60);
+  
+  // Calculate and display time remaining in the level
+  fill(255);
+  int timePassed = millis() - levelStartTime;
+  int timeRemaining = (levelDuration - timePassed) / 1000;
+  textAlign(RIGHT, TOP);
+  text("Time: " + timeRemaining, width - 10, 10);
+  
+  textAlign(CENTER, CENTER); // Reset alignment for other text
+}
+
+
+// =================================================================================
+// TARGET MANAGEMENT FUNCTIONS
+// =================================================================================
+
+/**
+ * Randomly spawns new targets in available lanes, with rate limiting.
+ * Can spawn multiple targets at once (a "chord").
+ */
+void spawnNewTargets() {
+  // 1. Clean up old timestamps from the spawn tracker
+  long currentTime = millis();
+  for (int i = spawnTimestamps.size() - 1; i >= 0; i--) {
+    if (currentTime - spawnTimestamps.get(i) > 1000) {
+      spawnTimestamps.remove(i);
+    }
+  }
+
+  // 2. A small chance to spawn a "chord" of notes each frame
+  if (random(1) < 0.05) {
+    // 3. Decide how many notes in this chord (e.g., 1 to 3)
+    int notesInChord = int(random(1, 4)); 
+    ArrayList<Integer> usedLanesInChord = new ArrayList<Integer>();
+
+    for (int i = 0; i < notesInChord; i++) {
+      // 4. Check if we have exceeded the global spawn rate limit
+      if (spawnTimestamps.size() >= MAX_SPAWNS_PER_SECOND) {
+        break; // Stop spawning for this frame if limit is reached
+      }
+
+      // 5. Find a valid, unused lane that is not on cooldown
+      int attempts = 0;
+      int lane;
+      do {
+        lane = int(random(NUM_LANES));
+        attempts++;
+        // Keep trying if lane is on cooldown OR already used in this chord
+      } while ((millis() - laneCooldowns[lane] < TARGET_COOLDOWN || usedLanesInChord.contains(lane)) && attempts < 20);
+
+      // If we found a valid lane after a reasonable number of tries
+      if (attempts < 20) {
+        float x = lane * laneWidth + (laneWidth / 2);
+        float y = -TARGET_RADIUS; // All notes in a chord start at the same y
+        color c = laneColors[lane];
+        
+        targets.add(new Target(x, y, gameSpeed, c, lane));
+        
+        // Update cooldowns and tracking lists
+        laneCooldowns[lane] = millis();
+        spawnTimestamps.add((long) millis());
+        usedLanesInChord.add(lane);
+      }
+    }
+  }
+}
+
+
+/**
+ * Updates the position of all targets and draws them.
+ * Also removes targets that have gone off-screen and penalizes for misses.
+ */
+void updateAndDrawTargets() {
+  // Iterate backwards to safely remove items from the list while iterating
+  for (int i = targets.size() - 1; i >= 0; i--) {
+    Target t = targets.get(i);
+    t.update();
+    t.display();
+    
+    // PENALTY: Check for missed targets that have passed the hit zone
+    if (!t.wasHit && !t.missed && t.y > hitZoneY + HIT_ZONE_HEIGHT) {
+      deathPoints++;
+      t.missed = true; // Mark as missed to avoid multiple penalties
+    }
+    
+    // If a target is completely off the bottom of the screen, remove it
+    if (t.y > height + t.radius) {
+      targets.remove(i);
+    }
+  }
+}
+
+// =================================================================================
+// GAME STATE AND INPUT HANDLING
+// =================================================================================
+
+/**
+ * Checks if the 30-second level duration has passed.
+ */
+void checkLevelTimer() {
+  if (millis() - levelStartTime > levelDuration) {
+    level++; // Increase level number
+    gameSpeed += 0.5; // Increase game speed for the next level
+    currentState = GameState.LEVEL_END;
+    levelEndTransitionTime = millis(); // Start the transition timer
+  }
+}
+
+/**
+ * Checks if the player has made too many mistakes.
+ */
+void checkDeathPoints() {
+  if (deathPoints >= MAX_DEATH_POINTS) {
+    totalScore += score; // Add current score to total before ending
+    currentState = GameState.GAME_OVER;
+  }
+}
+
+
+/**
+ * Handles all keyboard input from the player.
+ */
+void keyPressed() {
+  // Pressing SPACE ends the game at any time
+  if (key == ' ') {
+    if (currentState == GameState.PLAYING) {
+        totalScore += score; // Add current score to total before ending
+    }
+    currentState = GameState.GAME_OVER;
+    return; // Exit the function early
+  }
+  
+  // Only process note hits if the game is in the PLAYING state
+  if (currentState == GameState.PLAYING) {
+    int laneHit = -1;
+    
+    // Find which lane corresponds to the key pressed
+    for (int i = 0; i < keys.length; i++) {
+      if (key == keys[i]) {
+        laneHit = i;
+        break;
+      }
+    }
+    
+    // If a valid key was pressed
+    if (laneHit != -1) {
+      boolean successfulHit = false;
+      // Check all targets to see if one was hit successfully
+      for (Target t : targets) {
+        // Check if the target is in the correct lane, is hittable, and hasn't been hit yet
+        if (t.lane == laneHit && t.isHittable() && !t.wasHit) {
+          score += 10; // Increase score
+          t.wasHit = true; // Mark the target as hit
+          successfulHit = true;
+          // We break here to only score one target per key press
+          break; 
+        }
+      }
+      
+      // PENALTY: If no successful hit was made, it was a mistake.
+      if (!successfulHit) {
+        deathPoints++;
+      }
+    }
+  }
+}
+
+
+// =================================================================================
+// TARGET CLASS
+// Defines the properties and behavior of a single target (note).
+// =================================================================================
+class Target {
+  float x, y;
+  float speed;
+  color c;
+  int radius;
+  int lane;
+  boolean wasHit; // To prevent scoring multiple times on the same target
+  boolean missed; // To prevent multiple penalties for the same missed note
+
+  Target(float x, float y, float speed, color c, int lane) {
+    this.x = x;
+    this.y = y;
+    this.speed = speed;
+    this.c = c;
+    this.lane = lane;
+    this.radius = TARGET_RADIUS;
+    this.wasHit = false;
+    this.missed = false;
+  }
+
+  /**
+   * Updates the target's vertical position.
+   */
+  void update() {
+    y += speed;
+  }
+
+  /**
+   * Draws the target on the screen. If it was hit, draw it differently.
+   */
+  void display() {
+    stroke(255);
+    strokeWeight(2);
+    
+    // If the target was successfully hit, show a visual confirmation (e.g., white fill)
+    if (wasHit) {
+      fill(255, 255, 255, 200);
+    } else {
+      fill(c);
+    }
+    ellipse(x, y, radius * 2, radius * 2);
+  }
+
+  /**
+   * Checks if the target is currently within the scorable hit zone.
+   * A target is hittable if its center is inside the green box.
+   * @return true if the target is in the hit zone, false otherwise.
+   */
+  boolean isHittable() {
+    // The target is hittable if its center is within the vertical bounds of the hit zone.
+    return (y > hitZoneY && y < hitZoneY + HIT_ZONE_HEIGHT);
+  }
+}
